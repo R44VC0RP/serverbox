@@ -1,0 +1,35 @@
+{
+  "name": "serverbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ServerBox SDK for managing sandboxed OpenCode servers on Daytona",
+  "packageManager": "bun@1.3.9",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run build:core && bun run build:sdk && bun run build:proxy",
+    "build:core": "bun run --cwd packages/core build",
+    "build:sdk": "bun run --cwd packages/sdk build",
+    "build:proxy": "bun run --cwd packages/proxy build",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "check": "bun run build && bun run test",
+    "proxy:start": "node packages/proxy/dist/cli.js",
+    "proxy:dev": "tsx packages/proxy/src/cli.ts",
+    "example:proxy-cli": "bun examples/proxy-opencode-sdk.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.1.65",
+    "@serverbox/proxy": "workspace:*",
+    "@serverbox/sdk": "workspace:*",
+    "chalk": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

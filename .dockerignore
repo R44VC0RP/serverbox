@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+coverage
+*.log
+serverbox.db
+tests
+examples
+*.tsbuildinfo
+.env
