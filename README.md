@@ -175,6 +175,31 @@ Routes:
 - Unit tests: `bun run test:unit`
 - Integration tests (requires Daytona + OpenCode keys): `bun run test:integration`
 
+## Publishing
+
+If you want to publish under `@serverbox/*`, you must own the `serverbox` npm scope (npm org/user).
+
+1. Login:
+
+```bash
+npm login
+npm whoami
+```
+
+2. Dry run publish:
+
+```bash
+bun run release:npm -- --version 0.1.0 --dry-run
+```
+
+3. Publish:
+
+```bash
+bun run release:npm -- --version 0.1.0
+```
+
+The release script publishes in order: `@serverbox/core`, `@serverbox/sdk`, `@serverbox/proxy`.
+
 ## Packages
 
 - `@serverbox/core` - shared types, errors, constants, SQLite metadata store

@@ -6,3 +6,5 @@ coverage/
 *.tsbuildinfo
 serverbox.db
 .env
+plan.md
+scripts/

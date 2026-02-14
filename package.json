@@ -18,7 +18,8 @@
     "check": "bun run build && bun run test",
     "proxy:start": "node packages/proxy/dist/cli.js",
     "proxy:dev": "tsx packages/proxy/src/cli.ts",
-    "example:proxy-cli": "bun examples/proxy-opencode-sdk.ts"
+    "example:proxy-cli": "bun examples/proxy-opencode-sdk.ts",
+    "release:npm": "./scripts/release.sh"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.1.65",
