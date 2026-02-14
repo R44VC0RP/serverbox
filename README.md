@@ -1,39 +1,222 @@
 # ServerBox
 
-ServerBox is a TypeScript SDK for managing sandboxed OpenCode servers on Daytona.
+On-demand, sandboxed [OpenCode](https://opencode.ai) server instances powered by [Daytona](https://daytona.io).
 
-It handles sandbox lifecycle and infrastructure only. Consumers should use `@opencode-ai/sdk` directly against the returned URL.
+ServerBox manages infrastructure and lifecycle only. You get back a URL and credentials, then use [`@opencode-ai/sdk`](https://www.npmjs.com/package/@opencode-ai/sdk) directly against it.
 
-## Quick Start
+## Demo
+
+https://x.com/ryanvogel/status/2022495102615326850
+
+## Install
 
 ```bash
-bun install
-bun run build
-bun run test
+npm install @serverbox/sdk
+# or
+bun add @serverbox/sdk
 ```
 
-Required env: `DAYTONA_API_KEY`.
+| Package | Description |
+|---|---|
+| [`@serverbox/core`](https://www.npmjs.com/package/@serverbox/core) | Shared types, errors, constants, SQLite metadata store |
+| [`@serverbox/sdk`](https://www.npmjs.com/package/@serverbox/sdk) | ServerBox manager and instance lifecycle operations |
+| [`@serverbox/proxy`](https://www.npmjs.com/package/@serverbox/proxy) | Stable-URL reverse proxy with admin API and auto-resume |
 
-Optional Daytona overrides: `DAYTONA_API_URL`, `DAYTONA_TARGET`.
+## How It Works
 
-`SERVERBOX_ADMIN_API_KEY` is required for proxy mode.
+```
+ServerBox.create()
+  -> spins up a Daytona sandbox (~90ms)
+  -> installs OpenCode
+  -> starts `opencode serve` on port 4096
+  -> returns a public URL + credentials
 
-## Run With Docker
+You use @opencode-ai/sdk against that URL.
 
-1. Ensure `.env` contains at least:
-   - `DAYTONA_API_KEY`
-   - `OPENCODE_ZEN_API_KEY` (or pass auth via admin create payload)
-   - `SERVERBOX_ADMIN_API_KEY`
-2. Start the proxy:
+When idle for 30 min, Daytona auto-stops the sandbox.
+On next request through the proxy, it auto-resumes.
+All session data persists on disk across stop/start cycles.
+```
+
+## Quick Start (SDK)
+
+```ts
+import { ServerBox } from "@serverbox/sdk";
+import { createOpencodeClient } from "@opencode-ai/sdk";
+
+// 1. Create a sandboxed OpenCode instance
+const sb = new ServerBox({
+  daytonaApiKey: process.env.DAYTONA_API_KEY,
+});
+
+const instance = await sb.create({
+  auth: {
+    provider: "opencode",            // OpenCode Zen (default)
+    apiKey: process.env.OPENCODE_ZEN_API_KEY,
+  },
+});
+
+// 2. Use @opencode-ai/sdk directly against the returned URL
+const connection = instance.getConnectionInfo();
+const client = createOpencodeClient({
+  baseUrl: connection.baseUrl,
+  headers: connection.headers,
+});
+
+const session = await client.session.create({ body: { title: "demo" } });
+const response = await client.session.prompt({
+  path: { id: session.data.id },
+  body: { parts: [{ type: "text", text: "Hello from ServerBox!" }] },
+});
+
+// 3. Lifecycle management
+await instance.stop();    // sandbox stops, filesystem preserved
+await instance.resume();  // sandbox restarts, all session data intact
+await instance.destroy(); // permanently removed
+await sb.close();
+```
+
+## Provider Auth
+
+ServerBox defaults to **OpenCode Zen** but supports any provider OpenCode supports.
+
+```ts
+// OpenCode Zen (default — one key, 28+ models)
+await sb.create({
+  auth: { provider: "opencode", apiKey: "zen-key-..." },
+});
+
+// Anthropic
+await sb.create({
+  auth: { provider: "anthropic", apiKey: "sk-ant-..." },
+  opencode: { model: "anthropic/claude-sonnet-4-5" },
+});
+
+// AWS Bedrock (env-based auth)
+await sb.create({
+  auth: {
+    provider: "amazon-bedrock",
+    env: {
+      AWS_ACCESS_KEY_ID: "...",
+      AWS_SECRET_ACCESS_KEY: "...",
+      AWS_REGION: "us-east-1",
+    },
+  },
+});
+
+// Multiple providers at once
+await sb.create({
+  auth: [
+    { provider: "opencode", apiKey: "zen-key-..." },
+    { provider: "anthropic", apiKey: "sk-ant-..." },
+  ],
+});
+
+// Custom OpenAI-compatible provider
+await sb.create({
+  auth: { provider: "my-provider", apiKey: "..." },
+  opencode: {
+    model: "my-provider/my-model",
+    provider: {
+      "my-provider": {
+        npm: "@ai-sdk/openai-compatible",
+        name: "My Provider",
+        options: { baseURL: "https://api.myprovider.com/v1" },
+        models: {
+          "my-model": { name: "My Model", limit: { context: 200000, output: 65536 } },
+        },
+      },
+    },
+  },
+});
+```
+
+## Instance API
+
+```ts
+instance.id            // unique instance ID
+instance.sandboxId     // Daytona sandbox ID
+instance.state         // "running" | "stopped" | "archived" | "error" | "destroyed"
+instance.url           // public preview URL (null if not running)
+instance.credentials   // { username, password } for OpenCode Basic Auth
+
+// Lifecycle
+await instance.stop();
+await instance.resume({ timeout: 60_000 });
+await instance.archive();
+await instance.destroy();
+await instance.health();   // { healthy: boolean, version: string }
+
+// Shell commands inside the sandbox
+await instance.exec("npm test");
+// -> { exitCode, stdout, stderr }
+
+// File operations
+await instance.uploadFile("/workspace/fix.ts", code);
+const buf = await instance.downloadFile("/workspace/output.txt");
+```
+
+## Proxy Mode
+
+The proxy gives you stable per-instance URLs and transparent auto-resume when stopped sandboxes receive requests.
 
 ```bash
+npm install @serverbox/proxy
+```
+
+```ts
+import { ServerBoxProxy } from "@serverbox/proxy";
+
+const proxy = new ServerBoxProxy({
+  adminApiKey: process.env.SERVERBOX_ADMIN_API_KEY!,
+  serverboxConfig: {
+    daytonaApiKey: process.env.DAYTONA_API_KEY,
+  },
+});
+
+await proxy.start(); // default: http://127.0.0.1:7788
+```
+
+### Admin API
+
+All admin routes require `x-serverbox-admin-key` header.
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/healthz` | Proxy health check |
+| `POST` | `/admin/instances` | Create a new instance |
+| `GET` | `/admin/instances` | List all instances |
+| `GET` | `/admin/instances/:id` | Get one instance |
+| `POST` | `/admin/instances/:id/resume` | Resume instance |
+| `POST` | `/admin/instances/:id/stop` | Stop instance |
+| `POST` | `/admin/instances/:id/archive` | Archive instance |
+| `DELETE` | `/admin/instances/:id` | Destroy instance |
+
+### Instance Proxy
+
+All requests to `/i/:instanceId/*` are reverse-proxied to the sandbox's OpenCode server with auth headers injected automatically.
+
+If the sandbox is stopped, the proxy auto-resumes it before forwarding the request (with in-flight deduplication to prevent thundering herd).
+
+```bash
+# Create an instance
+curl -X POST http://127.0.0.1:7788/admin/instances \
+  -H "content-type: application/json" \
+  -H "x-serverbox-admin-key: $SERVERBOX_ADMIN_API_KEY" \
+  -d '{ "auth": { "provider": "opencode", "apiKey": "'$OPENCODE_ZEN_API_KEY'" } }'
+
+# Use the returned proxyUrl with @opencode-ai/sdk
+# e.g. http://127.0.0.1:7788/i/<instance-id>
+```
+
+## Docker
+
+```bash
+# .env must contain: DAYTONA_API_KEY, OPENCODE_ZEN_API_KEY, SERVERBOX_ADMIN_API_KEY
 docker compose up --build
 ```
 
-Verbose container logs are enabled by default in compose:
-
-- `SERVERBOX_LOG_LEVEL=debug`
-- `SERVERBOX_PROXY_REQUEST_LOGS=true`
+Debug logging is enabled by default in compose (`SERVERBOX_LOG_LEVEL=debug`).
 
 Tail logs:
 
@@ -41,167 +224,52 @@ Tail logs:
 docker compose logs -f serverbox-proxy
 ```
 
-3. Health check:
+## Interactive CLI
 
-```bash
-curl http://127.0.0.1:7788/healthz
-```
-
-4. Create an instance through admin API:
-
-```bash
-curl -X POST http://127.0.0.1:7788/admin/instances \
-  -H "content-type: application/json" \
-  -H "x-serverbox-admin-key: $SERVERBOX_ADMIN_API_KEY" \
-  -d '{
-    "auth": {
-      "provider": "opencode",
-      "apiKey": "'$OPENCODE_ZEN_API_KEY'"
-    }
-  }'
-```
-
-The response includes an `instance.proxyUrl` like `http://127.0.0.1:7788/i/<instance-id>`.
-
-5. Run the end-to-end proxy + OpenCode SDK example:
+An example interactive CLI is included for testing sandbox conversations:
 
 ```bash
 bun run example:proxy-cli
 ```
 
-This starts an interactive CLI that sends prompts through `@opencode-ai/sdk` to `instance.proxyUrl`.
-Useful commands in the CLI: `/help`, `/new`, `/attach <session-id>`, `/status`, `/stop`, `/resume`, `/id`, `/exit`.
+Requires the proxy to be running (`docker compose up`). Supports:
 
-Reconnect to an existing OpenCode session:
+- Send prompts and receive model responses
+- `/help` `/new` `/attach <session-id>` `/status` `/stop` `/resume` `/id` `/exit`
+- Reconnect to existing sessions: `bun run example:proxy-cli -- -s <session-id>`
+- Keep instances after exit: `bun run example:proxy-cli -- --keep`
 
-```bash
-bun run example:proxy-cli -- -s <session-id>
-```
+## Environment Variables
 
-Optionally restrict reconnect lookup to one instance:
-
-```bash
-bun run example:proxy-cli -- -i <instance-id> -s <session-id>
-```
-
-Optional env:
-
-- `SERVERBOX_INSTANCE_ID=<id>` to reuse an existing instance
-- `SERVERBOX_KEEP_INSTANCE=true` to keep created instance after exit
-- `OPENCODE_PROVIDER` and `OPENCODE_PROVIDER_API_KEY` to create with a non-Zen provider
-
-## Usage
-
-```ts
-import { ServerBox } from "@serverbox/sdk";
-
-const serverbox = new ServerBox({
-  daytonaApiKey: process.env.DAYTONA_API_KEY
-});
-
-const instance = await serverbox.create({
-  auth: {
-    provider: "opencode",
-    apiKey: process.env.OPENCODE_ZEN_API_KEY
-  }
-});
-
-const connection = instance.getConnectionInfo();
-console.log(connection.baseUrl);
-console.log(connection.headers); // includes Basic auth + preview token
-
-await instance.stop();
-await instance.resume();
-await instance.destroy();
-await serverbox.close();
-```
-
-Use `connection.baseUrl` and `connection.headers` with `@opencode-ai/sdk` directly.
-
-## Proxy Mode (Phase 4)
-
-Proxy mode gives you stable per-instance URLs and auto-resume.
-
-```ts
-import { ServerBoxProxy } from "@serverbox/proxy";
-
-const proxy = new ServerBoxProxy({
-  adminApiKey: process.env.SERVERBOX_ADMIN_API_KEY!,
-  // optional. If omitted, proxy routes reuse adminApiKey.
-  // set to null to disable proxy auth on /i/:instanceId/*
-  proxyApiKey: process.env.SERVERBOX_PROXY_API_KEY,
-  serverboxConfig: {
-    daytonaApiKey: process.env.DAYTONA_API_KEY
-  }
-});
-
-const started = await proxy.start();
-
-// Create instance through admin API
-await fetch(`${started.url}/admin/instances`, {
-  method: "POST",
-  headers: {
-    "content-type": "application/json",
-    "x-serverbox-admin-key": process.env.SERVERBOX_ADMIN_API_KEY!
-  },
-  body: JSON.stringify({
-    auth: {
-      provider: "opencode",
-      apiKey: process.env.OPENCODE_ZEN_API_KEY
-    }
-  })
-});
-
-// Client base URL shape:
-// http://<proxy-host>:<proxy-port>/i/<instance-id>
-// If proxyApiKey is enabled, send x-serverbox-proxy-key on requests.
-// By default, proxyApiKey reuses SERVERBOX_ADMIN_API_KEY.
-```
-
-Routes:
-
-- `GET /healthz` - proxy health
-- `POST /admin/instances` - create instance
-- `GET /admin/instances` - list instances
-- `GET /admin/instances/:id` - get one instance
-- `POST /admin/instances/:id/resume` - resume one instance
-- `POST /admin/instances/:id/stop` - stop one instance
-- `POST /admin/instances/:id/archive` - archive one instance
-- `DELETE /admin/instances/:id` - destroy one instance
-- `/i/:instanceId/*` - reverse proxy to sandbox OpenCode server (auto-resume enabled by default)
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DAYTONA_API_KEY` | Yes | - | Daytona API key |
+| `DAYTONA_API_URL` | No | `https://app.daytona.io/api` | Daytona API URL |
+| `DAYTONA_TARGET` | No | `us` | Daytona target region |
+| `OPENCODE_ZEN_API_KEY` | No | - | Default provider key for OpenCode Zen |
+| `SERVERBOX_ADMIN_API_KEY` | Proxy | - | Admin API key for proxy routes |
+| `SERVERBOX_LOG_LEVEL` | No | `info` | Log level (`debug`, `info`, `warn`, `error`) |
+| `SERVERBOX_PROXY_REQUEST_LOGS` | No | `false` | Log all HTTP request/response details |
+| `SERVERBOX_PROXY_PORT` | No | `7788` | Proxy listen port |
+| `SERVERBOX_PROXY_HOST` | No | `0.0.0.0` | Proxy listen host |
+| `SERVERBOX_PROXY_AUTO_RESUME` | No | `true` | Auto-resume stopped instances on proxy requests |
+| `SERVERBOX_DB_PATH` | No | `./serverbox.db` | SQLite metadata store path |
 
 ## Testing
 
-- Unit tests: `bun run test:unit`
-- Integration tests (requires Daytona + OpenCode keys): `bun run test:integration`
+```bash
+bun run test:unit                              # unit tests (mocked Daytona)
+DAYTONA_API_KEY=... bun run test:integration   # real sandbox lifecycle
+```
 
 ## Publishing
 
-If you want to publish under `@serverbox/*`, you must own the `serverbox` npm scope (npm org/user).
-
-1. Login:
-
 ```bash
 npm login
-npm whoami
+bun run release:npm -- --version 0.1.0 --dry-run   # preview
+bun run release:npm -- --version 0.1.0              # publish
 ```
 
-2. Dry run publish:
+## License
 
-```bash
-bun run release:npm -- --version 0.1.0 --dry-run
-```
-
-3. Publish:
-
-```bash
-bun run release:npm -- --version 0.1.0
-```
-
-The release script publishes in order: `@serverbox/core`, `@serverbox/sdk`, `@serverbox/proxy`.
-
-## Packages
-
-- `@serverbox/core` - shared types, errors, constants, SQLite metadata store
-- `@serverbox/sdk` - ServerBox manager and instance lifecycle operations
-- `@serverbox/proxy` - stable URL reverse proxy with admin API and auto-resume
+MIT
