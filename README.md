@@ -158,7 +158,19 @@ const buf = await instance.downloadFile("/workspace/output.txt");
 
 ## Proxy Mode
 
-The proxy gives you stable per-instance URLs and transparent auto-resume when stopped sandboxes receive requests.
+The proxy is for when you run ServerBox as a **shared backend service** instead of using the SDK directly in your app code.
+
+**When you need it:**
+
+- **Multi-tenant SaaS** — your web app creates sandbox instances for users. Each gets a stable `/i/<instance-id>` URL. The proxy handles auth injection, routing, and auto-resume.
+- **Stable URLs** — without the proxy, your client needs to handle sandbox stop/resume. With the proxy, `/i/<instance-id>` always works — stopped sandboxes wake up transparently.
+- **Centralized management** — one admin API to create, list, stop, resume, and destroy instances via HTTP. Multiple services or team members share the same pool.
+- **Separate infra from app code** — your frontend only needs the proxy URL + an API key. No Daytona SDK, no sandbox orchestration logic.
+- **Self-hosted deployment** — run as a Docker container. Persists metadata in SQLite across restarts.
+
+**When you DON'T need it:**
+
+- You're using `@serverbox/sdk` directly in a single Node/Bun process (script, CLI tool, backend that manages its own instances).
 
 ```bash
 npm install @serverbox/proxy
@@ -260,14 +272,6 @@ Requires the proxy to be running (`docker compose up`). Supports:
 ```bash
 bun run test:unit                              # unit tests (mocked Daytona)
 DAYTONA_API_KEY=... bun run test:integration   # real sandbox lifecycle
-```
-
-## Publishing
-
-```bash
-npm login
-bun run release:npm -- --version 0.1.0 --dry-run   # preview
-bun run release:npm -- --version 0.1.0              # publish
 ```
 
 ## License
